@@ -52,7 +52,7 @@ public class TrafficCar : MonoBehaviour
     // ---- private memory ------------------------------------------------------
     private TrafficManager manager;
     private Rigidbody body;
-    private AudioSource horn;
+    private AudioSource horn, engine;
     private readonly List<Vector3> path = new List<Vector3>();
     private readonly List<float> along = new List<float>();
     private float distance;          // how far along 'path' we are (metres)
@@ -87,6 +87,23 @@ public class TrafficCar : MonoBehaviour
             horn.maxDistance = 80f;
             horn.pitch = kind == VehicleKind.Bus || kind == VehicleKind.Truck ? 0.7f : (kind == VehicleKind.Motorbike ? 1.4f : 1f);
             horn.playOnAwake = false;
+        }
+
+        // Engine sound: 3D, so you hear vehicles coming and going past you.
+        if (manager.EngineClip != null)
+        {
+            engine = gameObject.AddComponent<AudioSource>();
+            engine.clip = manager.EngineClip;
+            engine.loop = true;
+            engine.spatialBlend = 1f;
+            engine.rolloffMode = AudioRolloffMode.Linear;
+            engine.minDistance = 3f;
+            engine.maxDistance = kind == VehicleKind.Bus || kind == VehicleKind.Truck ? 60f : 35f;
+            engine.volume = kind == VehicleKind.Bus || kind == VehicleKind.Truck ? 0.45f : (kind == VehicleKind.Motorbike ? 0.3f : 0.22f);
+            engine.dopplerLevel = 0.6f;   // the "neeeoowm" as a vehicle passes
+            engine.playOnAwake = false;
+            engine.time = Random.Range(0f, 0.9f);   // so they don't all sound in step
+            engine.Play();
         }
     }
 
@@ -159,6 +176,12 @@ public class TrafficCar : MonoBehaviour
         }
 
         Place(dt, false);
+        if (engine != null)
+        {
+            // Big vehicles sound deeper; motorbikes buzz higher.
+            float basePitch = kind == VehicleKind.Bus || kind == VehicleKind.Truck ? 0.5f : (kind == VehicleKind.Motorbike ? 1.15f : 0.75f);
+            engine.pitch = basePitch + Speed / 16f;
+        }
         UpdateLights(target < Speed - 0.1f || Speed < 0.2f);
     }
 

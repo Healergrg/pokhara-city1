@@ -30,6 +30,7 @@ public class RulesHUD : MonoBehaviour
 
     private void OnGUI()
     {
+        if (GameMenu.IsOpen) return;   // hide while a menu is on screen
         if (judge == null || !judge.enabled) return;
         if (big == null) MakeStyles();
         float s = Screen.height / 1080f;

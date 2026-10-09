@@ -152,8 +152,3 @@ public class ZebraCrossing : MonoBehaviour
     }
 }
 
-// Put on the pedestrian, so the judge knows "that was a person, not a wall".
-public class Pedestrian : MonoBehaviour
-{
-    public ZebraCrossing crossing;
-}

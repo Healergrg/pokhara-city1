@@ -49,13 +49,20 @@ public class PokharaCar : MonoBehaviour
     public bool LeftIndicatorOn { get; private set; }
     public bool RightIndicatorOn { get; private set; }
     public bool IsBraking { get; private set; }
+    public int GearNumber { get; private set; } = 1;   // 1-5 when driving forward
+    public float Rpm01 { get; private set; }            // engine revs, 0 = idle, 1 = red line
 
     private Rigidbody body;
     private bool reversing;
     private float currentSteer;
     private float blinkTimer;
     private float indicatorStartHeading;
-    private AudioSource engineAudio, hornAudio, clickAudio;
+    private AudioSource engineAudio, loadAudio, hornAudio, clickAudio, skidAudio, crashAudio;
+    private float skidVolume;
+    // A pretend 5-speed gearbox: the top speed (km/h) of each gear.
+    // Like a bicycle with gears: each gear covers a range of speed, and the
+    // engine revs climb inside that range, then drop when you change up.
+    private static readonly float[] GearTop = { 18f, 32f, 47f, 62f, 999f };
     private bool lastBlinkState;
 
     private void Awake()
@@ -67,9 +74,15 @@ public class PokharaCar : MonoBehaviour
 
         // Sounds are made by maths here, so you don't need any audio files.
         engineAudio = MakeAudio(CarSounds.Engine(), true, 0.35f);
+        loadAudio = MakeAudio(CarSounds.EngineLoad(), true, 0f);      // the "roar" when you press the gas
         hornAudio = MakeAudio(CarSounds.Horn(), true, 0.6f);
         clickAudio = MakeAudio(CarSounds.Click(), false, 0.5f);
-        engineAudio.Play();
+        skidAudio = MakeAudio(CarSounds.Skid(), true, 0f);
+        crashAudio = MakeAudio(CarSounds.Crash(), false, 0.8f);
+        engineAudio.Play(); loadAudio.Play(); skidAudio.Play();
+
+        // Pokhara street sounds (birds, distant horns, temple bells...).
+        if (GetComponent<AmbientCity>() == null) gameObject.AddComponent<AmbientCity>();
     }
 
     // ---------------------------------------------------------------------
@@ -87,8 +100,8 @@ public class PokharaCar : MonoBehaviour
         if (DriveInput.Horn() && !hornAudio.isPlaying) hornAudio.Play();
         if (!DriveInput.Horn() && hornAudio.isPlaying) hornAudio.Stop();
 
-        // Engine sound gets higher as the car goes faster.
-        engineAudio.pitch = 0.7f + Mathf.Abs(SpeedKmh) / topSpeedKmh * 1.3f + DriveInput.Throttle() * 0.15f;
+        UpdateEngineSound();
+        UpdateSkidSound();
 
         // Brake lights
         foreach (GameObject g in brakeLightGlows) if (g != null) g.SetActive(IsBraking);
@@ -154,6 +167,71 @@ public class PokharaCar : MonoBehaviour
 
         // A little push down at speed so the car stays planted on the road.
         body.AddForce(-transform.up * Mathf.Abs(SpeedKmh) * 25f);
+    }
+
+    // ---------------------------------------------------------------------
+    // Sounds
+    // ---------------------------------------------------------------------
+    private void UpdateEngineSound()
+    {
+        float speed = Mathf.Abs(SpeedKmh);
+        float gas = Gear == "R" ? DriveInput.Brake() : DriveInput.Throttle();
+
+        if (Gear == "R")
+        {
+            GearNumber = 1;
+            Rpm01 = Mathf.Clamp01(0.2f + speed / reverseTopSpeedKmh * 0.6f + gas * 0.1f);
+        }
+        else if (speed < 1f)
+        {
+            GearNumber = 1;
+            Rpm01 = 0.12f + gas * 0.25f;   // idling; a little rev when you press the gas
+        }
+        else
+        {
+            // Which gear are we in? The first one whose top speed is above our speed.
+            int g = 0;
+            while (g < GearTop.Length - 1 && speed > GearTop[g]) g++;
+            GearNumber = g + 1;
+            // Inside the gear: from 35% revs just after changing up, to 100% at its top speed.
+            float bottom = g == 0 ? 0f : GearTop[g - 1];
+            float top = g == GearTop.Length - 1 ? topSpeedKmh + 5f : GearTop[g];
+            Rpm01 = Mathf.Lerp(0.35f, 1f, Mathf.InverseLerp(bottom, top, speed)) * (0.85f + 0.15f * gas);
+        }
+
+        float dt = Time.deltaTime;
+        engineAudio.pitch = Mathf.Lerp(engineAudio.pitch, 0.55f + Rpm01 * 1.3f, 12f * dt);
+        engineAudio.volume = 0.22f + 0.12f * gas + 0.1f * Rpm01;
+        loadAudio.pitch = engineAudio.pitch;
+        loadAudio.volume = Mathf.Lerp(loadAudio.volume, 0.16f * gas * (0.4f + Rpm01), 8f * dt);
+    }
+
+    // Tyres squeal when they slide (sharp turns, hard braking, handbrake).
+    private void UpdateSkidSound()
+    {
+        float slip = 0f;
+        foreach (WheelCollider w in new[] { frontLeft, frontRight, rearLeft, rearRight })
+        {
+            WheelHit hit;
+            if (w != null && w.GetGroundHit(out hit))
+                slip = Mathf.Max(slip, Mathf.Abs(hit.sidewaysSlip), Mathf.Abs(hit.forwardSlip) * 0.7f);
+        }
+        float wanted = Mathf.Abs(SpeedKmh) > 8f ? Mathf.Clamp01((slip - 0.3f) * 2f) * 0.5f : 0f;
+        skidVolume = Mathf.MoveTowards(skidVolume, wanted, Time.deltaTime * 3f);
+        skidAudio.volume = skidVolume;
+        skidAudio.pitch = 0.9f + Mathf.Abs(SpeedKmh) / 200f;
+    }
+
+    // A thud when you hit something (louder for harder crashes).
+    private void OnCollisionEnter(Collision collision)
+    {
+        float impact = collision.relativeVelocity.magnitude;
+        if (impact < 3f || collision.contactCount == 0) return;
+        // Bumping up a kerb or landing on the road is not a crash.
+        if (Vector3.Dot(collision.GetContact(0).normal, Vector3.up) > 0.7f) return;
+        crashAudio.volume = Mathf.Clamp01(impact / 14f);
+        crashAudio.pitch = Random.Range(0.85f, 1.1f);
+        crashAudio.Play();
     }
 
     // ---------------------------------------------------------------------
@@ -229,20 +307,150 @@ public static class CarSounds
 {
     private const int Rate = 44100;
 
-    // Low humming engine: a few deep tones mixed together, loops smoothly.
+    // A small petrol engine: one deep "putt" sound (45 Hz) plus its
+    // overtones, with a gentle "chug" on top. Every tone has a whole number
+    // of waves per second, so the 1-second sound loops without a click.
     public static AudioClip Engine()
     {
-        int n = Rate;   // 1 second, loops
+        int n = Rate;
+        var data = new float[n];
+        var rng = new System.Random(4);
+        var phase = new float[13];
+        for (int k = 1; k <= 12; k++) phase[k] = (float)rng.NextDouble() * 6.28f;
+        for (int i = 0; i < n; i++)
+        {
+            float t = i / (float)Rate;
+            float v = 0f;
+            for (int k = 1; k <= 12; k++)
+                v += Mathf.Sin(2f * Mathf.PI * 45f * k * t + phase[k]) / Mathf.Pow(k, 0.85f);
+            float chug = 1f + 0.35f * Mathf.Sin(2f * Mathf.PI * 15f * t);   // cylinders firing
+            data[i] = v * chug * 0.16f;
+        }
+        Blend(data, LoopNoise(n, 0.08f, 11), 0.10f);   // a little mechanical rattle
+        return Make("Engine", data);
+    }
+
+    // The roar under load: rumbly noise that gets louder when you press the gas.
+    public static AudioClip EngineLoad()
+    {
+        int n = Rate;
+        float[] data = LoopNoise(n, 0.05f, 21);
+        for (int i = 0; i < n; i++) data[i] *= 1f + 0.5f * Mathf.Sin(2f * Mathf.PI * 30f * i / Rate);
+        Normalize(data, 0.7f);
+        return Make("EngineLoad", data);
+    }
+
+    // Tyre squeal: a wobbly high tone mixed with hiss.
+    public static AudioClip Skid()
+    {
+        int n = Rate;
+        float[] hiss = LoopNoise(n, 0.6f, 31);
         var data = new float[n];
         for (int i = 0; i < n; i++)
         {
             float t = i / (float)Rate;
-            data[i] = 0.5f * Mathf.Sin(2f * Mathf.PI * 50f * t)
-                    + 0.3f * Mathf.Sin(2f * Mathf.PI * 100f * t)
-                    + 0.15f * Mathf.Sin(2f * Mathf.PI * 150f * t);
-            data[i] *= 0.6f;
+            float wobble = 18f * Mathf.Sin(2f * Mathf.PI * 7f * t);
+            data[i] = 0.45f * Mathf.Sin(2f * Mathf.PI * (820f * t) + wobble / 7f) + 0.35f * hiss[i];
         }
-        return Make("Engine", data);
+        Normalize(data, 0.6f);
+        return Make("Skid", data);
+    }
+
+    // Crash: a deep thump and a crunch, fading out quickly.
+    public static AudioClip Crash()
+    {
+        int n = Rate / 2;
+        float[] crunch = LoopNoise(n, 0.35f, 41);
+        var data = new float[n];
+        for (int i = 0; i < n; i++)
+        {
+            float t = i / (float)Rate;
+            float thump = Mathf.Sin(2f * Mathf.PI * (70f - 40f * t) * t) * Mathf.Exp(-t * 9f);
+            data[i] = 0.9f * thump + 0.6f * crunch[i] * Mathf.Exp(-t * 14f);
+        }
+        Normalize(data, 0.9f);
+        return Make("Crash", data);
+    }
+
+    // Soft city hum (far-away traffic, people, fans), loops for 4 seconds.
+    public static AudioClip CityHum()
+    {
+        int n = Rate * 4;
+        float[] data = LoopNoise(n, 0.02f, 51);
+        Normalize(data, 0.5f);
+        return Make("CityHum", data);
+    }
+
+    // A small bird: two quick rising chirps.
+    public static AudioClip Bird()
+    {
+        int n = Rate * 4 / 10;
+        var data = new float[n];
+        float phase = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            float t = i / (float)Rate;
+            float local = t % 0.16f;                       // each chirp lasts 0.16 s
+            float f = 2600f + 9000f * local;               // pitch slides up
+            phase += 2f * Mathf.PI * f / Rate;
+            float env = Mathf.Sin(Mathf.PI * Mathf.Clamp01(local / 0.12f));
+            data[i] = Mathf.Sin(phase) * env * 0.5f * (t < 0.32f ? 1f : 0f);
+        }
+        return Make("Bird", data);
+    }
+
+    // A temple bell: a few metal tones that ring and slowly fade.
+    public static AudioClip Bell()
+    {
+        int n = Rate * 3;
+        var data = new float[n];
+        float[] f = { 523f, 1059f, 1571f, 2093f };
+        float[] a = { 1f, 0.6f, 0.35f, 0.2f };
+        for (int i = 0; i < n; i++)
+        {
+            float t = i / (float)Rate, v = 0f;
+            for (int k = 0; k < f.Length; k++) v += a[k] * Mathf.Sin(2f * Mathf.PI * f[k] * t) * Mathf.Exp(-t * (1.2f + k * 0.8f));
+            data[i] = v * 0.4f;
+        }
+        return Make("Bell", data);
+    }
+
+    // ---- helpers for the sound recipes ----
+    // Random noise, smoothed ("smooth" small = deep rumble, near 1 = sharp hiss),
+    // with the end faded into the start so it loops without a click.
+    private static float[] LoopNoise(int n, float smooth, int seed)
+    {
+        var rng = new System.Random(seed);
+        int fade = Rate / 10;
+        var raw = new float[n + fade];
+        float y = 0f;
+        for (int i = 0; i < raw.Length; i++)
+        {
+            float x = (float)rng.NextDouble() * 2f - 1f;
+            y += smooth * (x - y);     // a simple "low-pass filter": follows the noise slowly
+            raw[i] = y;
+        }
+        var data = new float[n];
+        for (int i = 0; i < n; i++) data[i] = raw[i];
+        for (int i = 0; i < fade; i++)
+        {
+            float k = i / (float)fade;
+            data[i] = raw[i] * k + raw[n + i] * (1f - k);   // crossfade the seam
+        }
+        Normalize(data, 1f);
+        return data;
+    }
+
+    private static void Blend(float[] into, float[] add, float amount)
+    {
+        for (int i = 0; i < into.Length && i < add.Length; i++) into[i] += add[i] * amount;
+    }
+
+    private static void Normalize(float[] data, float peak)
+    {
+        float max = 0.0001f;
+        foreach (float v in data) max = Mathf.Max(max, Mathf.Abs(v));
+        for (int i = 0; i < data.Length; i++) data[i] = data[i] / max * peak;
     }
 
     // Two-tone horn, like most cars on Nepali roads.

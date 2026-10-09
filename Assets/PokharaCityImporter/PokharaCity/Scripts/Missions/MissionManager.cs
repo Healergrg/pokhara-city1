@@ -96,6 +96,7 @@ public class MissionManager : MonoBehaviour
     private void Update()
     {
         if (car == null || network == null) return;
+        if (GameMenu.IsOpen) return;   // the pause / title menu is on screen
 
         switch (CurrentState)
         {
@@ -130,8 +131,9 @@ public class MissionManager : MonoBehaviour
     }
 
     // ---- menu -------------------------------------------------------------------
-    private void OpenMenu()
+    public void OpenMenu()   // public: the main menu's "Missions" button uses it
     {
+        if (CurrentState == State.Countdown || CurrentState == State.Driving || CurrentState == State.Result) EndMission();
         CurrentState = State.Menu;
         Time.timeScale = 0f;   // pause the world while you choose
     }
@@ -140,6 +142,25 @@ public class MissionManager : MonoBehaviour
     {
         Time.timeScale = 1f;
         CurrentState = State.FreeRoam;
+    }
+
+    // Stop any mission and go back to free driving (used by the main menu).
+    public void QuitMission()
+    {
+        if (CurrentState != State.FreeRoam) EndMission();
+    }
+
+    // ---- for the minimap -----------------------------------------------------------
+    // The route being driven right now (null when free driving).
+    public PlannedRoute ActiveRoute =>
+        CurrentState == State.Countdown || CurrentState == State.Driving ? route : null;
+
+    public bool TryGetNextGate(out Vector3 position)
+    {
+        position = Vector3.zero;
+        if (ActiveRoute == null || nextCheckpoint >= checkpoints.Count) return false;
+        position = route.PointAt(checkpoints[nextCheckpoint]);
+        return true;
     }
 
     // ---- start ------------------------------------------------------------------
@@ -327,7 +348,7 @@ public class MissionManager : MonoBehaviour
     // =========================================================================
     private void OnGUI()
     {
-        if (car == null) return;
+        if (car == null || GameMenu.IsOpen) return;
         if (big == null) MakeStyles();
         float s = Screen.height / 1080f;
         huge.fontSize = Mathf.RoundToInt(140 * s);
@@ -340,7 +361,7 @@ public class MissionManager : MonoBehaviour
         switch (CurrentState)
         {
             case State.FreeRoam:
-                GUI.Label(new Rect(20 * s, 55 * s, 700 * s, 30 * s), "FREE DRIVING   -   press M for missions", small);
+                GUI.Label(new Rect(20 * s, 55 * s, 700 * s, 30 * s), "FREE DRIVING   -   M = missions   -   Esc = menu", small);
                 break;
             case State.Menu: DrawMenu(s); break;
             case State.Countdown:

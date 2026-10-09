@@ -33,6 +33,7 @@ public class TrafficManager : MonoBehaviour
     public float despawnDistance = 330f;
 
     public AudioClip HornClip { get; private set; }
+    public AudioClip EngineClip { get; private set; }   // shared by every AI vehicle
     public static TrafficManager Instance { get; private set; }   // so pedestrians can check for traffic
     public readonly List<TrafficCar> vehicles = new List<TrafficCar>();
 
@@ -59,6 +60,7 @@ public class TrafficManager : MonoBehaviour
         crossings = FindObjectsByType<ZebraCrossing>(FindObjectsSortMode.None);
         if (player != null) playerBody = player.GetComponent<Rigidbody>();
         HornClip = CarSounds.Horn();
+        EngineClip = CarSounds.Engine();
 
         if (network == null || network.lanes.Count == 0)
         {
